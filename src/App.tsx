@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import {
+  API_BASE_URL,
   createSession,
   deleteDocument,
   deleteSession,
@@ -548,7 +549,9 @@ export default function App() {
             {mode === 'upload' ? 'Upload PDFs' : mode === 'library' ? 'PDF Library' : activeSession?.title ?? 'Chat'}
           </div>
           <div className="topbarRight">
-            <span className="pill">API: / (proxied to :8000)</span>
+            <span className="pill" title="VITE_API_BASE_URL when set at build time">
+              {API_BASE_URL ? `API: ${API_BASE_URL}` : 'API: dev proxy → :8000'}
+            </span>
           </div>
         </div>
 
