@@ -1,0 +1,12 @@
+# Netlify — https://docs.netlify.com/configure-builds/overview/
+# If the repo root is the monorepo (not `web/`), set in Netlify UI:
+#   Base directory: web
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# SPA: serve index.html for unknown paths (safe for client-side routing later)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
