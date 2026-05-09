@@ -79,6 +79,17 @@
   box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.15);
 }
 
+/* Four nav pills: 2×2 so labels stay readable in the sidebar */
+.modesGrid {
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.modesGrid button {
+  flex: 1 1 calc(50% - 2px);
+  min-width: calc(50% - 4px);
+}
+
 .sidebarActions {
   margin-bottom: 14px;
 }
@@ -138,12 +149,12 @@
 }
 
 .docScope {
-  margin-bottom: 18px;
-  padding: 14px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  margin-bottom: 16px;
+  padding: 12px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.03);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  background: rgba(255, 255, 255, 0.025);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.18);
 }
 
 .docScopeHead {
@@ -151,7 +162,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .docScopeTitle {
@@ -247,8 +258,26 @@
 .docScopeToolbar {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
   gap: 8px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
+  padding: 2px 0;
+}
+
+.docScopeToolbarLabel {
+  margin-right: auto;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.5;
+}
+
+.docScopeToolbarBtns {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .miniBtn {
@@ -273,63 +302,114 @@
 .docList {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
+  max-height: min(42vh, 320px);
+  overflow-y: auto;
+  padding: 2px 2px 4px 0;
+  margin: 0 -2px 0 0;
+  scrollbar-gutter: stable;
+}
+
+.docList::-webkit-scrollbar {
+  width: 6px;
+}
+
+.docList::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+}
+
+.docList::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .docCard {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-  padding: 10px 10px;
-  border-radius: 12px;
+  display: grid;
+  grid-template-columns: 22px 24px minmax(0, 1fr);
+  column-gap: 8px;
+  align-items: start;
+  padding: 8px 9px;
+  border-radius: 11px;
   border: 1px solid rgba(255, 255, 255, 0.07);
-  background: rgba(0, 0, 0, 0.18);
+  background: rgba(0, 0, 0, 0.22);
   cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
 }
 
 .docCard:hover {
-  border-color: rgba(167, 139, 250, 0.25);
-  background: rgba(139, 92, 246, 0.06);
+  border-color: rgba(167, 139, 250, 0.28);
+  background: rgba(139, 92, 246, 0.07);
+}
+
+.docCard:focus-within {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.35);
 }
 
 .docCardChecked {
-  border-color: rgba(167, 139, 250, 0.45);
-  background: rgba(139, 92, 246, 0.1);
+  border-color: rgba(167, 139, 250, 0.5);
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.14), rgba(0, 0, 0, 0.12));
+  box-shadow: inset 0 0 0 1px rgba(167, 139, 250, 0.12);
+}
+
+.docCardCheckWrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  min-height: 22px;
+  padding-top: 1px;
+  align-self: start;
 }
 
 .docCardCb {
-  width: 17px;
-  height: 17px;
-  margin-top: 3px;
+  width: 16px;
+  height: 16px;
+  margin: 0;
   flex-shrink: 0;
   accent-color: #a78bfa;
   cursor: pointer;
 }
 
+.docCardFileIcon {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  width: 24px;
+  padding-top: 2px;
+  color: rgba(165, 180, 252, 0.55);
+  flex-shrink: 0;
+}
+
+.docCardChecked .docCardFileIcon {
+  color: rgba(196, 181, 253, 0.85);
+}
+
 .docCardBody {
-  flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
+  padding-top: 1px;
 }
 
 .docCardBadges {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 4px 6px;
   align-items: center;
 }
 
 .docName {
-  font-size: 13px;
-  font-weight: 550;
-  line-height: 1.35;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  word-break: break-word;
 }
 
 .docBadge {
@@ -1074,6 +1154,194 @@
 
 .muted {
   opacity: 0.8;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ----- Usage dashboard ----- */
+
+.dashboardPage {
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 18px 28px;
+}
+
+.dashboard {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.dashboardHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.dashboardTitle {
+  margin: 0 0 6px;
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.dashboardLead {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  max-width: 52ch;
+}
+
+.dashboardLead code {
+  font-size: 12px;
+  padding: 1px 5px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.dashboardToolbar {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.dashboardDays {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+
+.dashboardDays select {
+  min-width: 120px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.dashboardLoading,
+.dashboardEmpty {
+  padding: 24px;
+  text-align: center;
+}
+
+.dashboardCards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+.dashCard {
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.dashCardHighlight {
+  border-color: rgba(167, 139, 250, 0.35);
+  background: linear-gradient(160deg, rgba(139, 92, 246, 0.18), rgba(255, 255, 255, 0.03));
+}
+
+.dashCardLabel {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.72;
+  margin-bottom: 8px;
+}
+
+.dashCardValue {
+  font-size: 1.35rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+.dashCardHint {
+  margin-top: 8px;
+  font-size: 11px;
+  opacity: 0.65;
+}
+
+.dashboardTableTitle {
+  margin: 0 0 12px;
+  font-size: 0.95rem;
+  font-weight: 650;
+}
+
+.dashboardTableWrap {
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.2);
+  padding: 16px 18px 18px;
+}
+
+.tableScroll {
+  overflow-x: auto;
+  margin: 0 -4px;
+}
+
+.usageTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.usageTable th,
+.usageTable td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.usageTable th {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  opacity: 0.65;
+  white-space: nowrap;
+}
+
+.usageTable tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.usageTable tbody tr:hover td {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.usageQuery {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nowrap {
+  white-space: nowrap;
 }
 
 button {

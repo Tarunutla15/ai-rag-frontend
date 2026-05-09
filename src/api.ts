@@ -3,6 +3,7 @@ import type {
   ChatRequest,
   ChatResponse,
   ChatSession,
+  DashboardUsageResponse,
   DocumentInfo,
   SessionDocumentsRequest,
   SessionMessagesResponse,
@@ -104,6 +105,19 @@ export async function replaceDocument(documentId: string, file: File): Promise<a
   const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}/replace`), { method: 'POST', body: form })
   if (!res.ok) throw new Error(await readError(res))
   return await res.json()
+}
+
+export async function fetchDashboardUsage(params?: {
+  days?: number
+  limit?: number
+}): Promise<DashboardUsageResponse> {
+  const q = new URLSearchParams()
+  if (params?.days != null) q.set('days', String(params.days))
+  if (params?.limit != null) q.set('limit', String(params.limit))
+  const qs = q.toString()
+  const res = await fetch(apiUrl(`/dashboard/usage${qs ? `?${qs}` : ''}`), { method: 'GET' })
+  if (!res.ok) throw new Error(await readError(res))
+  return (await res.json()) as DashboardUsageResponse
 }
 
 export async function deleteDocument(documentId: string): Promise<{

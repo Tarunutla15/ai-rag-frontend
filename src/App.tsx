@@ -17,8 +17,9 @@ import {
 } from './api'
 import type { ChatMessage, ChatSession, DocumentInfo } from './types'
 import { ChatMarkdown } from './ChatMarkdown'
+import { Dashboard } from './Dashboard'
 
-type Mode = 'chat' | 'upload' | 'library'
+type Mode = 'chat' | 'upload' | 'library' | 'dashboard'
 
 type UploadedDoc = {
   file_id: string
@@ -382,7 +383,7 @@ export default function App() {
             <div className="title">PDF Chatbot</div>
             <p className="tagline">Ask questions scoped to your library</p>
           </div>
-          <div className="modes" role="tablist" aria-label="Main sections">
+          <div className="modes modesGrid" role="tablist" aria-label="Main sections">
             <button
               className={mode === 'chat' ? 'active' : ''}
               onClick={() => setMode('chat')}
@@ -406,6 +407,14 @@ export default function App() {
               type="button"
             >
               Library
+            </button>
+            <button
+              className={mode === 'dashboard' ? 'active' : ''}
+              onClick={() => setMode('dashboard')}
+              type="button"
+              title="Token usage per query"
+            >
+              Usage
             </button>
           </div>
         </div>
@@ -448,26 +457,38 @@ export default function App() {
           {availableDocOptions.length === 0 ? null : (
             <>
               <div className="docScopeToolbar">
-                <button type="button" className="miniBtn" disabled={busy} onClick={() => void onSelectAllDocs()}>
-                  All
-                </button>
-                <button type="button" className="miniBtn" disabled={busy} onClick={() => void onClearDocSelection()}>
-                  None
-                </button>
+                <span className="docScopeToolbarLabel">Selection</span>
+                <div className="docScopeToolbarBtns">
+                  <button type="button" className="miniBtn" disabled={busy} onClick={() => void onSelectAllDocs()}>
+                    All
+                  </button>
+                  <button type="button" className="miniBtn" disabled={busy} onClick={() => void onClearDocSelection()}>
+                    None
+                  </button>
+                </div>
               </div>
-              <div className="docList">
+              <div className="docList" role="list">
                 {availableDocOptions.map((d) => (
                   <label
                     key={d.file_id}
                     className={'docCard' + (selectedFileIds.includes(d.file_id) ? ' docCardChecked' : '')}
+                    role="listitem"
                   >
-                    <input
-                      className="docCardCb"
-                      type="checkbox"
-                      checked={selectedFileIds.includes(d.file_id)}
-                      onChange={(e) => onToggleDoc(d.file_id, e.target.checked)}
-                      disabled={busy}
-                    />
+                    <span className="docCardCheckWrap">
+                      <input
+                        className="docCardCb"
+                        type="checkbox"
+                        checked={selectedFileIds.includes(d.file_id)}
+                        onChange={(e) => onToggleDoc(d.file_id, e.target.checked)}
+                        disabled={busy}
+                      />
+                    </span>
+                    <span className="docCardFileIcon" aria-hidden>
+                      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" strokeLinejoin="round" />
+                        <path d="M14 2v6h6" strokeLinejoin="round" />
+                      </svg>
+                    </span>
                     <div className="docCardBody">
                       <span className="docName" title={d.file_name}>
                         {d.file_name}
@@ -546,7 +567,13 @@ export default function App() {
       <main className="main">
         <div className="topbar">
           <div className="topbarTitle">
-            {mode === 'upload' ? 'Upload PDFs' : mode === 'library' ? 'PDF Library' : activeSession?.title ?? 'Chat'}
+            {mode === 'upload'
+              ? 'Upload PDFs'
+              : mode === 'library'
+                ? 'PDF Library'
+                : mode === 'dashboard'
+                  ? 'Usage dashboard'
+                  : activeSession?.title ?? 'Chat'}
           </div>
           <div className="topbarRight">
             <span className="pill" title="VITE_API_BASE_URL when set at build time">
@@ -557,7 +584,19 @@ export default function App() {
 
         {error ? <div className="error">{error}</div> : null}
 
-        {mode === 'upload' ? (
+        {mode === 'dashboard' ? (
+          <section className="dashboardPage" aria-labelledby="usage-dashboard-heading">
+            <h2 id="usage-dashboard-heading" className="srOnly">
+              Usage dashboard
+            </h2>
+            <Dashboard
+              onError={(msg) => {
+                setError(msg)
+                pushToast('error', msg)
+              }}
+            />
+          </section>
+        ) : mode === 'upload' ? (
           <div className="uploadPage">
             <section className="uploadCard" aria-labelledby="upload-heading">
               <div className="uploadCardHeader">

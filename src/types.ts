@@ -67,3 +67,30 @@ export type DocumentInfo = {
   pdf_path?: string | null
 }
 
+export type UsageSummary = {
+  chat_completions: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  estimated_cost_usd?: number | null
+}
+
+export type UsageEventItem = {
+  id?: number | null
+  session_id?: string | null
+  query_preview: string
+  prompt_tokens?: number | null
+  completion_tokens?: number | null
+  total_tokens?: number | null
+  model?: string | null
+  provider?: string | null
+  cost_usd?: number | null
+  created_at: string
+}
+
+export type DashboardUsageResponse = {
+  days: number
+  summary: UsageSummary
+  recent: UsageEventItem[]
+}
+
