@@ -18,6 +18,16 @@ function apiUrl(path: string): string {
   return API_BASE_URL ? `${API_BASE_URL}${p}` : p
 }
 
+/** Prefix API origin onto relative /documents/... and /upload/... URLs inside Markdown (production builds). */
+export function absolutizeMarkdownApiPaths(md: string): string {
+  if (!API_BASE_URL || !md) return md
+  const b = API_BASE_URL
+  return md.replace(
+    /(\]\(|!\[[^\]]*\]\()(\/(?:documents|upload)\/[^)\s]+)\)/g,
+    (_, prefix: string, path: string) => `${prefix}${b}${path})`,
+  )
+}
+
 async function readError(res: Response): Promise<string> {
   try {
     const data = (await res.json()) as any
