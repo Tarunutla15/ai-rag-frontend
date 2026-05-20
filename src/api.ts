@@ -58,6 +58,13 @@ export async function deleteSession(sessionId: string): Promise<void> {
   if (!res.ok) throw new Error(await readError(res))
 }
 
+export async function deleteAllSessions(): Promise<{ deleted_count: number }> {
+  const res = await fetch(apiUrl('/sessions/'), { method: 'DELETE' })
+  if (!res.ok) throw new Error(await readError(res))
+  const data = (await res.json()) as { deleted_count?: number }
+  return { deleted_count: data.deleted_count ?? 0 }
+}
+
 export async function fetchSessionMessages(sessionId: string) {
   const res = await fetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}/messages`), { method: 'GET' })
   if (!res.ok) throw new Error(await readError(res))
@@ -89,6 +96,96 @@ export async function sendChat(payload: ChatRequest): Promise<ChatResponse> {
   })
   if (!res.ok) throw new Error(await readError(res))
   return (await res.json()) as ChatResponse
+}
+
+export type ChatStreamHandlers = {
+  onMeta?: (data: {
+    session_id: string
+    detected_technology?: string | null
+    detected_domain?: string | null
+  }) => void
+  onToken?: (content: string) => void
+  onDone?: (data: ChatResponse) => void
+  onError?: (detail: string) => void
+}
+
+/** Stream assistant reply via SSE (POST /chat/stream). */
+export async function sendChatStream(
+  payload: ChatRequest,
+  handlers: ChatStreamHandlers,
+): Promise<ChatResponse> {
+  const res = await fetch(apiUrl('/chat/stream'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) throw new Error(await readError(res))
+  if (!res.body) throw new Error('Streaming not supported by this browser')
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let finalResponse: ChatResponse | null = null
+
+  const dispatch = (obj: Record<string, unknown>) => {
+    const type = obj.type as string
+    if (type === 'meta' && obj.session_id) {
+      handlers.onMeta?.({
+        session_id: String(obj.session_id),
+        detected_technology: (obj.detected_technology as string | null) ?? null,
+        detected_domain: (obj.detected_domain as string | null) ?? null,
+      })
+    } else if (type === 'token' && typeof obj.content === 'string') {
+      handlers.onToken?.(obj.content)
+    } else if (type === 'done' && typeof obj.answer === 'string') {
+      finalResponse = {
+        answer: obj.answer,
+        session_id: String(obj.session_id ?? payload.session_id ?? ''),
+        sources: (obj.sources as string[] | null) ?? null,
+        detected_technology: (obj.detected_technology as string | null) ?? null,
+        detected_domain: (obj.detected_domain as string | null) ?? null,
+      }
+      handlers.onDone?.(finalResponse)
+    } else if (type === 'error') {
+      const detail = String(obj.detail ?? 'Stream error')
+      handlers.onError?.(detail)
+      throw new Error(detail)
+    }
+  }
+
+  const parseSseBuffer = (chunk: string) => {
+    const parts = chunk.split('\n\n')
+    const remainder = parts.pop() ?? ''
+    for (const part of parts) {
+      for (const line of part.split('\n')) {
+        const trimmed = line.trim()
+        if (!trimmed.startsWith('data:')) continue
+        const jsonStr = trimmed.slice(5).trim()
+        if (!jsonStr) continue
+        try {
+          dispatch(JSON.parse(jsonStr) as Record<string, unknown>)
+        } catch {
+          /* ignore malformed SSE chunks */
+        }
+      }
+    }
+    return remainder
+  }
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    buffer = parseSseBuffer(buffer)
+  }
+  if (buffer.trim()) {
+    parseSseBuffer(`${buffer}\n\n`)
+  }
+
+  if (!finalResponse) {
+    throw new Error('Stream ended without a completion event')
+  }
+  return finalResponse
 }
 
 export async function uploadBatch(files: File[]): Promise<BatchUploadResponse> {
@@ -142,4 +239,11 @@ export async function deleteDocument(documentId: string): Promise<{
     document_id: string
     errors?: string[]
   }
+}
+
+export async function deleteAllDocuments(): Promise<{ deleted_count: number; errors?: string[] }> {
+  const res = await fetch(apiUrl('/documents/'), { method: 'DELETE' })
+  if (!res.ok) throw new Error(await readError(res))
+  const data = (await res.json()) as { deleted_count?: number; errors?: string[] }
+  return { deleted_count: data.deleted_count ?? 0, errors: data.errors }
 }

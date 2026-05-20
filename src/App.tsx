@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import {
   API_BASE_URL,
   createSession,
+  deleteAllDocuments,
   deleteDocument,
+  deleteAllSessions,
   deleteSession,
   documentPdfUrl,
   fetchDocuments,
@@ -11,7 +13,7 @@ import {
   fetchSessions,
   fetchSessionMessages,
   replaceDocument,
-  sendChat,
+  sendChatStream,
   setSessionDocuments,
   uploadBatch,
 } from './api'
@@ -26,8 +28,14 @@ type UploadedDoc = {
   file_name: string
   technology?: string
   domain?: string
-  /** From library API: UPLOADED / INGESTED / FAILED */
   status?: string
+}
+
+const MODE_META: Record<Mode, { label: string; title: string }> = {
+  chat: { label: 'Chat', title: 'Chat' },
+  upload: { label: 'Upload', title: 'Upload documents' },
+  library: { label: 'Library', title: 'Document library' },
+  dashboard: { label: 'Usage', title: 'Usage & tokens' },
 }
 
 function formatFileSize(bytes: number): string {
@@ -36,33 +44,67 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+function NavIcon({ mode }: { mode: Mode }) {
+  const common = { width: 22, height: 22, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.75 }
+  if (mode === 'chat') {
+    return (
+      <svg {...common}>
+        <path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" strokeLinejoin="round" />
+      </svg>
+    )
+  }
+  if (mode === 'upload') {
+    return (
+      <svg {...common}>
+        <path d="M12 4v12M8 8l4-4 4 4" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" strokeLinecap="round" />
+      </svg>
+    )
+  }
+  if (mode === 'library') {
+    return (
+      <svg {...common}>
+        <path d="M4 7h16M4 12h16M4 17h10" strokeLinecap="round" />
+      </svg>
+    )
+  }
+  return (
+    <svg {...common}>
+      <path d="M4 19V5M4 19h16M8 15v4M12 11v8M16 7v12" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 export default function App() {
   const [mode, setMode] = useState<Mode>('chat')
   const [sessions, setSessions] = useState<ChatSession[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [messagesLoading, setMessagesLoading] = useState(false)
   const [prompt, setPrompt] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [chatSending, setChatSending] = useState(false)
+  const [pageBusy, setPageBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [files, setFiles] = useState<File[]>([])
   const [uploadedDocs, setUploadedDocs] = useState<UploadedDoc[]>([])
   const [selectedFileIds, setSelectedFileIds] = useState<string[]>([])
+  const [scopeOpen, setScopeOpen] = useState(false)
   const [libraryDocs, setLibraryDocs] = useState<DocumentInfo[]>([])
+  const [libraryLoading, setLibraryLoading] = useState(false)
   const [libraryBusyId, setLibraryBusyId] = useState<string | null>(null)
   const [toasts, setToasts] = useState<
     Array<{ id: number; type: 'success' | 'error' | 'info'; title?: string; text: string }>
   >([])
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
+  const loadGenRef = useRef(0)
 
-  function pushToast(type: 'success' | 'error' | 'info', text: string, title?: string) {
+  const pushToast = useCallback((type: 'success' | 'error' | 'info', text: string, title?: string) => {
     const id = Date.now() + Math.floor(Math.random() * 1000)
     setToasts((prev) => [...prev, { id, type, text, title }])
     const ms = type === 'error' ? 5200 : type === 'success' ? 4800 : 4000
-    window.setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id))
-    }, ms)
-  }
+    window.setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), ms)
+  }, [])
 
   const activeSession = useMemo(
     () => sessions.find((s) => s.id === activeSessionId) ?? null,
@@ -72,7 +114,6 @@ export default function App() {
   const availableDocOptions = useMemo(() => {
     const map = new Map<string, UploadedDoc>()
     for (const d of uploadedDocs) map.set(d.file_id, d)
-    // ensure selected ids are visible even if we don't have metadata (page refresh)
     for (const id of selectedFileIds) {
       if (!map.has(id)) map.set(id, { file_id: id, file_name: id })
     }
@@ -81,54 +122,75 @@ export default function App() {
     )
   }, [uploadedDocs, selectedFileIds])
 
-  async function refreshSessions(selectId?: string) {
+  const scopeLabel = useMemo(() => {
+    const total = availableDocOptions.length
+    const n = selectedFileIds.length
+    if (total === 0) return 'No documents in library yet'
+    if (n === 0) return `Searching all ${total} document${total === 1 ? '' : 's'}`
+    if (n === total) return `Searching all ${total} selected`
+    return `Searching ${n} of ${total} document${total === 1 ? '' : 's'}`
+  }, [availableDocOptions.length, selectedFileIds.length])
+
+  const refreshSessions = useCallback(async (selectId?: string) => {
     const list = await fetchSessions()
     setSessions(list)
     if (selectId) setActiveSessionId(selectId)
-  }
+  }, [])
 
-  async function loadMessages(sessionId: string) {
-    const msgs = await fetchSessionMessages(sessionId)
-    setMessages(msgs)
-  }
+  const refreshLibrary = useCallback(async () => {
+    setLibraryLoading(true)
+    try {
+      const docs = await fetchDocuments()
+      setLibraryDocs(docs)
+      setUploadedDocs((prev) => {
+        const merged = new Map<string, UploadedDoc>()
+        for (const d of prev) merged.set(d.file_id, d)
+      for (const d of docs) {
+        if (!d.document_id) continue
+        if (String(d.status ?? '').toUpperCase() === 'FAILED') continue
+        merged.set(d.document_id, {
+            file_id: d.document_id,
+            file_name: d.file_name,
+            technology: d.technology ?? undefined,
+            domain: d.domain ?? undefined,
+            status: d.status ?? undefined,
+          })
+        }
+        return Array.from(merged.values())
+      })
+    } finally {
+      setLibraryLoading(false)
+    }
+  }, [])
+
+  const loadMessages = useCallback(async (sessionId: string) => {
+    const gen = ++loadGenRef.current
+    setMessagesLoading(true)
+    try {
+      const msgs = await fetchSessionMessages(sessionId)
+      if (loadGenRef.current !== gen) return
+      setMessages(msgs)
+    } finally {
+      if (loadGenRef.current === gen) setMessagesLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
     Promise.all([refreshSessions(), refreshLibrary()]).catch((e) => setError(String(e)))
-  }, [])
-
-  async function refreshLibrary() {
-    const docs = await fetchDocuments()
-    setLibraryDocs(docs)
-    // also merge into uploadedDocs so scope UI can show them
-    setUploadedDocs((prev) => {
-      const merged = new Map<string, UploadedDoc>()
-      for (const d of prev) merged.set(d.file_id, d)
-      for (const d of docs) {
-        if (!d.document_id) continue
-        merged.set(d.document_id, {
-          file_id: d.document_id,
-          file_name: d.file_name,
-          technology: d.technology ?? undefined,
-          domain: d.domain ?? undefined,
-          status: d.status ?? undefined,
-        })
-      }
-      return Array.from(merged.values())
-    })
-  }
+  }, [refreshSessions, refreshLibrary])
 
   useEffect(() => {
     if (!activeSessionId) {
       setMessages([])
+      setMessagesLoading(false)
       return
     }
+    // Do not refetch while streaming — onMeta sets session id mid-stream and would
+    // replace local placeholders with server state (user-only) before tokens arrive.
+    if (chatSending) return
     loadMessages(activeSessionId).catch((e) => setError(String(e)))
-  }, [activeSessionId])
+  }, [activeSessionId, loadMessages, chatSending])
 
-  // When switching sessions, load its document scope (server-side persisted).
-  // Important: after the first message the backend creates a session_id — if we never
-  // PUT session documents, fetch returns [] and would wipe local checkbox state unless
-  // onSend persists scope first (see onSend).
   useEffect(() => {
     if (!activeSessionId) {
       setSelectedFileIds([])
@@ -140,41 +202,81 @@ export default function App() {
   }, [activeSessionId])
 
   useEffect(() => {
+    if (mode !== 'chat') return
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages.length])
+  }, [messages.length, chatSending, mode])
+
+  const bumpSessionMeta = useCallback((sessionId: string, deltaMessages = 2) => {
+    setSessions((prev) =>
+      prev.map((s) =>
+        s.id === sessionId
+          ? { ...s, message_count: (s.message_count ?? 0) + deltaMessages, last_message_at: new Date().toISOString() }
+          : s,
+      ),
+    )
+  }, [])
 
   async function onNewChat() {
     setError(null)
-    setBusy(true)
+    setPageBusy(true)
     try {
       const s = await createSession()
       await refreshSessions(s.id)
-      await loadMessages(s.id)
+      setMessages([])
+      setActiveSessionId(s.id)
     } catch (e) {
       setError(String(e))
     } finally {
-      setBusy(false)
+      setPageBusy(false)
     }
   }
 
   async function onDeleteChat(id: string) {
     setError(null)
-    setBusy(true)
+    setPageBusy(true)
     try {
       await deleteSession(id)
       const next = activeSessionId === id ? null : activeSessionId
       await refreshSessions()
       setActiveSessionId(next)
+      if (activeSessionId === id) setMessages([])
     } catch (e) {
       setError(String(e))
     } finally {
-      setBusy(false)
+      setPageBusy(false)
+    }
+  }
+
+  async function onClearAllChats() {
+    if (sessions.length === 0) return
+    const n = sessions.length
+    if (
+      !window.confirm(
+        `Delete all ${n} chat${n === 1 ? '' : 's'}? Messages and scope for each conversation will be removed. This cannot be undone.`,
+      )
+    ) {
+      return
+    }
+    setError(null)
+    setPageBusy(true)
+    try {
+      const { deleted_count } = await deleteAllSessions()
+      setSessions([])
+      setActiveSessionId(null)
+      setMessages([])
+      pushToast('success', `Removed ${deleted_count} chat${deleted_count === 1 ? '' : 's'}.`, 'Chats cleared')
+    } catch (e) {
+      const msg = String(e)
+      setError(msg)
+      pushToast('error', msg)
+    } finally {
+      setPageBusy(false)
     }
   }
 
   async function onSend() {
     const q = prompt.trim()
-    if (!q) return
+    if (!q || chatSending) return
 
     setPrompt('')
     setError(null)
@@ -186,92 +288,170 @@ export default function App() {
       content: q,
       created_at: new Date().toISOString(),
     }
-    setMessages((m) => [...m, userMsg])
+    const assistantId = Date.now() + 1
+    const assistantPlaceholder: ChatMessage = {
+      id: assistantId,
+      session_id: activeSessionId ?? '',
+      role: 'assistant',
+      content: '',
+      created_at: new Date().toISOString(),
+    }
+    setMessages((m) => [...m, userMsg, assistantPlaceholder])
+    setChatSending(true)
 
-    setBusy(true)
     try {
-      const res = await sendChat({
-        query: q,
-        session_id: activeSessionId ?? undefined,
-        ...(selectedFileIds.length > 0 ? { file_ids: selectedFileIds } : {}),
-      })
+      const res = await sendChatStream(
+        {
+          query: q,
+          session_id: activeSessionId ?? undefined,
+          ...(selectedFileIds.length > 0 ? { file_ids: selectedFileIds } : {}),
+        },
+        {
+          onMeta: (meta) => {
+            const sid = meta.session_id
+            if (!sid) return
+            setMessages((m) =>
+              m.map((x) =>
+                x.id === userMsg.id || x.id === assistantId ? { ...x, session_id: sid } : x,
+              ),
+            )
+            setActiveSessionId((prev) => prev ?? sid)
+          },
+          onToken: (token) => {
+            setMessages((m) => {
+              const hasPlaceholder = m.some((x) => x.id === assistantId)
+              if (hasPlaceholder) {
+                return m.map((x) =>
+                  x.id === assistantId ? { ...x, content: x.content + token } : x,
+                )
+              }
+              const lastAssistant = [...m].reverse().find((x) => x.role === 'assistant')
+              if (!lastAssistant) return m
+              return m.map((x) =>
+                x.id === lastAssistant.id ? { ...x, content: x.content + token } : x,
+              )
+            })
+          },
+        },
+      )
       const resolvedSessionId = res.session_id ?? activeSessionId ?? null
-      // Persist scope to Supabase BEFORE setActiveSessionId so the session_documents
-      // effect does not fetch [] and clear selectedFileIds on the 2nd message.
       if (resolvedSessionId && selectedFileIds.length > 0) {
         await setSessionDocuments(resolvedSessionId, { file_ids: selectedFileIds })
       }
-      if (!activeSessionId && res.session_id) {
-        setActiveSessionId(res.session_id)
-        await refreshSessions(res.session_id)
-      } else {
-        await refreshSessions()
+      if (resolvedSessionId) {
+        setActiveSessionId((prev) => prev ?? resolvedSessionId)
+        if (!activeSessionId) {
+          void refreshSessions(resolvedSessionId)
+        } else {
+          bumpSessionMeta(resolvedSessionId)
+          void refreshSessions()
+        }
       }
-      const assistantMsg: ChatMessage = {
-        id: Date.now() + 1,
-        session_id: res.session_id,
-        role: 'assistant',
-        content: res.answer,
-        created_at: new Date().toISOString(),
-      }
-      setMessages((m) => [...m, assistantMsg])
+      setMessages((m) => {
+        const hasPlaceholder = m.some((x) => x.id === assistantId)
+        if (hasPlaceholder) {
+          return m.map((x) =>
+            x.id === assistantId
+              ? { ...x, content: res.answer, session_id: res.session_id }
+              : x,
+          )
+        }
+        const lastAssistant = [...m].reverse().find((x) => x.role === 'assistant')
+        if (!lastAssistant) {
+          return [
+            ...m,
+            {
+              id: Date.now() + 2,
+              session_id: res.session_id,
+              role: 'assistant' as const,
+              content: res.answer,
+              created_at: new Date().toISOString(),
+            },
+          ]
+        }
+        return m.map((x) =>
+          x.id === lastAssistant.id
+            ? { ...x, content: res.answer, session_id: res.session_id }
+            : x,
+        )
+      })
     } catch (e) {
       const msg = String(e)
       setError(msg)
       pushToast('error', msg)
+      setMessages((m) => m.filter((x) => x.id !== userMsg.id && x.id !== assistantId))
     } finally {
-      setBusy(false)
+      setChatSending(false)
     }
   }
 
   async function onUpload() {
     if (files.length === 0) return
     setError(null)
-    setBusy(true)
+    setPageBusy(true)
     try {
       const res = await uploadBatch(files)
-      // Track uploaded docs locally so user can select them as scope.
-      // Backend uses the returned file_id as document_id.
-      const nextDocs: UploadedDoc[] = []
-      for (const r of res.results ?? []) {
-        if (r.file_id && (r.status === 'success' || r.status === 'duplicate')) {
-          nextDocs.push({
-            file_id: r.file_id,
-            file_name: r.file_name,
-            technology: r.technology,
-            domain: r.domain,
-          })
-        }
-      }
-      if (nextDocs.length) {
-        setUploadedDocs((prev) => {
-          const merged = new Map<string, UploadedDoc>()
-          for (const d of prev) merged.set(d.file_id, d)
-          for (const d of nextDocs) merged.set(d.file_id, d)
-          return Array.from(merged.values())
-        })
-      }
-      // Load library from server before leaving upload so the sidebar lists every PDF.
-      await refreshLibrary().catch(() => {})
-      await refreshSessions()
-      setMode('chat')
       const results = res.results ?? []
       const nOk = results.filter((r) => r.status === 'success').length
       const nDup = results.filter((r) => r.status === 'duplicate').length
       const nErr = results.filter((r) => r.status === 'error').length
-      const parts: string[] = []
-      if (nOk) parts.push(`${nOk} added to library`)
-      if (nDup) parts.push(`${nDup} already in library`)
-      if (nErr) parts.push(`${nErr} failed`)
-      const detail = parts.length ? parts.join(' · ') : res.message
-      pushToast('success', detail, 'Upload complete')
-      setFiles([])
+      const errResults = results.filter((r) => r.status === 'error')
+
+      if (nOk > 0 || nDup > 0) {
+        await refreshLibrary().catch(() => {})
+        void refreshSessions()
+        if (nOk > 0) setMode('chat')
+        const nextDocs: UploadedDoc[] = []
+        for (const r of results) {
+          if (r.file_id && (r.status === 'success' || r.status === 'duplicate')) {
+            nextDocs.push({
+              file_id: r.file_id,
+              file_name: r.file_name,
+              technology: r.technology,
+              domain: r.domain,
+            })
+          }
+        }
+        if (nextDocs.length) {
+          setUploadedDocs((prev) => {
+            const merged = new Map<string, UploadedDoc>()
+            for (const d of prev) merged.set(d.file_id, d)
+            for (const d of nextDocs) merged.set(d.file_id, d)
+            return Array.from(merged.values())
+          })
+        }
+      }
+
+      if (nErr > 0 && nOk === 0 && nDup === 0) {
+        const detail =
+          errResults.map((r) => `${r.file_name}: ${r.message || 'Upload failed'}`).join(' ') ||
+          res.message ||
+          'Upload failed — file was not stored.'
+        setError(detail)
+        pushToast('error', detail, 'Upload failed')
+      } else if (nErr > 0) {
+        const detail = errResults.map((r) => `${r.file_name}: ${r.message}`).join(' · ')
+        setError(detail)
+        pushToast('error', detail, 'Some files failed')
+        const parts: string[] = []
+        if (nOk) parts.push(`${nOk} added`)
+        if (nDup) parts.push(`${nDup} already in library`)
+        if (nErr) parts.push(`${nErr} failed`)
+        if (nOk || nDup) pushToast('success', parts.join(' · '), 'Upload finished')
+        setFiles([])
+      } else {
+        const parts: string[] = []
+        if (nOk) parts.push(`${nOk} added`)
+        if (nDup) parts.push(`${nDup} already in library`)
+        pushToast('success', parts.length ? parts.join(' · ') : res.message, 'Upload complete')
+        setFiles([])
+      }
     } catch (e) {
       const msg = String(e)
       setError(msg)
       pushToast('error', msg)
     } finally {
-      setBusy(false)
+      setPageBusy(false)
     }
   }
 
@@ -298,29 +478,60 @@ export default function App() {
   }
 
   async function onSelectAllDocs() {
-    setError(null)
     const ids = availableDocOptions.map((d) => d.file_id)
     setSelectedFileIds(ids)
     await persistSessionScope(ids)
   }
 
   async function onClearDocSelection() {
-    setError(null)
     setSelectedFileIds([])
     await persistSessionScope([])
   }
 
-  async function onDeleteLibraryDocument(documentId: string) {
-    if (!window.confirm('Delete this PDF and all its data (Supabase, Zilliz, local files)? This cannot be undone.')) {
+  async function onClearAllLibrary() {
+    if (libraryDocs.length === 0) return
+    const n = libraryDocs.length
+    if (
+      !window.confirm(
+        `Delete all ${n} document${n === 1 ? '' : 's'} from the library? Indexed chunks, vectors, and files will be removed. This cannot be undone.`,
+      )
+    ) {
       return
     }
+    setError(null)
+    setPageBusy(true)
+    try {
+      const { deleted_count, errors } = await deleteAllDocuments()
+      if (errors?.length) {
+        setError(`Deleted with warnings: ${errors.slice(0, 3).join('; ')}${errors.length > 3 ? '…' : ''}`)
+      }
+      setLibraryDocs([])
+      setUploadedDocs([])
+      setSelectedFileIds([])
+      if (activeSessionId) {
+        try {
+          await setSessionDocuments(activeSessionId, { file_ids: [] })
+        } catch {
+          /* ignore */
+        }
+      }
+      pushToast('success', `Removed ${deleted_count} document${deleted_count === 1 ? '' : 's'}.`, 'Library cleared')
+    } catch (e) {
+      const msg = String(e)
+      setError(msg)
+      pushToast('error', msg)
+    } finally {
+      setPageBusy(false)
+    }
+  }
+
+  async function onDeleteLibraryDocument(documentId: string) {
+    if (!window.confirm('Delete this document and all indexed data? This cannot be undone.')) return
     setError(null)
     setLibraryBusyId(documentId)
     try {
       const out = await deleteDocument(documentId)
-      if (out.errors?.length) {
-        setError(`Deleted with warnings: ${out.errors.join('; ')}`)
-      }
+      if (out.errors?.length) setError(`Deleted with warnings: ${out.errors.join('; ')}`)
       setLibraryDocs((prev) => prev.filter((d) => d.document_id !== documentId))
       setUploadedDocs((prev) => prev.filter((d) => d.file_id !== documentId))
       const nextScope = selectedFileIds.filter((id) => id !== documentId)
@@ -332,6 +543,7 @@ export default function App() {
           /* ignore */
         }
       }
+      pushToast('success', 'Document removed from library and search index.')
     } catch (e) {
       setError(String(e))
     } finally {
@@ -339,28 +551,17 @@ export default function App() {
     }
   }
 
+  const headerTitle =
+    mode === 'chat' ? (activeSession?.title ?? 'New conversation') : MODE_META[mode].title
+
+  const anyBusy = pageBusy || chatSending
+
   return (
     <div className="app">
-      {toasts.length ? (
-        <div className="toastHost" aria-live="polite" aria-relevant="additions">
+      {toasts.length > 0 && (
+        <div className="toastHost" aria-live="polite">
           {toasts.map((t) => (
-            <div key={t.id} className={'toast toast-' + t.type} role="status">
-              <div className="toastIcon" aria-hidden>
-                {t.type === 'success' ? (
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                ) : t.type === 'error' ? (
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" />
-                  </svg>
-                ) : (
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <circle cx="12" cy="12" r="10" />
-                    <path d="M12 16v-4M12 8h.01" strokeLinecap="round" />
-                  </svg>
-                )}
-              </div>
+            <div key={t.id} className={`toast toast-${t.type}`} role="status">
               <div className="toastBody">
                 {t.title ? <div className="toastTitle">{t.title}</div> : null}
                 <div className="toastText">{t.text}</div>
@@ -369,162 +570,67 @@ export default function App() {
                 type="button"
                 className="toastClose"
                 onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))}
-                aria-label="Dismiss notification"
+                aria-label="Dismiss"
               >
                 ×
               </button>
             </div>
           ))}
         </div>
-      ) : null}
-      <aside className="sidebar">
-        <div className="sidebarHeader">
-          <div className="brand">
-            <div className="title">PDF Chatbot</div>
-            <p className="tagline">Ask questions scoped to your library</p>
-          </div>
-          <div className="modes modesGrid" role="tablist" aria-label="Main sections">
-            <button
-              className={mode === 'chat' ? 'active' : ''}
-              onClick={() => setMode('chat')}
-              type="button"
-            >
-              Chat
-            </button>
-            <button
-              className={mode === 'upload' ? 'active' : ''}
-              onClick={() => setMode('upload')}
-              type="button"
-            >
-              Upload
-            </button>
-            <button
-              className={mode === 'library' ? 'active' : ''}
-              onClick={() => {
-                setMode('library')
+      )}
+
+      <nav className="navRail" aria-label="App sections">
+        <div className="navBrand" title="PDF Chatbot">
+          <span className="navBrandMark">R</span>
+        </div>
+        {(Object.keys(MODE_META) as Mode[]).map((m) => (
+          <button
+            key={m}
+            type="button"
+            className={`navItem${mode === m ? ' navItemActive' : ''}`}
+            onClick={() => {
+              setMode(m)
+              if (m === 'library' && libraryDocs.length === 0) {
                 refreshLibrary().catch((e) => setError(String(e)))
-              }}
-              type="button"
-            >
-              Library
-            </button>
-            <button
-              className={mode === 'dashboard' ? 'active' : ''}
-              onClick={() => setMode('dashboard')}
-              type="button"
-              title="Token usage per query"
-            >
-              Usage
-            </button>
-          </div>
-        </div>
-
-        <div className="sidebarActions">
-          <button className="btnPrimary" onClick={onNewChat} disabled={busy} type="button">
-            New chat
+              }
+            }}
+            title={MODE_META[m].label}
+          >
+            <NavIcon mode={m} />
+            <span>{MODE_META[m].label}</span>
           </button>
-        </div>
+        ))}
+      </nav>
 
-        <section className="docScope" aria-labelledby="pdfs-heading">
-          <div className="docScopeHead">
-            <h2 id="pdfs-heading" className="docScopeTitle">
-              Library
-              {availableDocOptions.length > 0 ? (
-                <span className="docScopeCount">{availableDocOptions.length}</span>
-              ) : null}
-            </h2>
-            <button
-              type="button"
-              className="docScopeRefresh"
-              title="Reload PDF list"
-              disabled={busy}
-              onClick={() => refreshLibrary().catch((e) => setError(String(e)))}
-            >
-              ↻
-            </button>
+      {mode === 'chat' && (
+        <aside className="sessionsPanel" aria-label="Conversations">
+          <div className="sessionsPanelHead">
+            <h2>Chats</h2>
+            <div className="sessionsPanelActions">
+              <button type="button" className="btnSm btnPrimary" onClick={onNewChat} disabled={pageBusy}>
+                New
+              </button>
+              {sessions.length > 0 && (
+                <button
+                  type="button"
+                  className="btnSm btnDanger"
+                  onClick={() => void onClearAllChats()}
+                  disabled={pageBusy}
+                  title="Delete all conversations"
+                >
+                  Clear all
+                </button>
+              )}
+            </div>
           </div>
-          {availableDocOptions.length > 0 ? (
-            <details className="docScopeHint">
-              <summary>Scope & filtering</summary>
-              <p>
-                Leave all unchecked to search <strong>every ingested</strong> PDF. Tick files to limit answers to those
-                documents only.
-              </p>
-            </details>
-          ) : (
-            <p className="docScopeLead muted">Add PDFs via Upload or Library. Retrieval uses all ingested files until you filter.</p>
-          )}
-          {availableDocOptions.length === 0 ? null : (
-            <>
-              <div className="docScopeToolbar">
-                <span className="docScopeToolbarLabel">Selection</span>
-                <div className="docScopeToolbarBtns">
-                  <button type="button" className="miniBtn" disabled={busy} onClick={() => void onSelectAllDocs()}>
-                    All
-                  </button>
-                  <button type="button" className="miniBtn" disabled={busy} onClick={() => void onClearDocSelection()}>
-                    None
-                  </button>
-                </div>
-              </div>
-              <div className="docList" role="list">
-                {availableDocOptions.map((d) => (
-                  <label
-                    key={d.file_id}
-                    className={'docCard' + (selectedFileIds.includes(d.file_id) ? ' docCardChecked' : '')}
-                    role="listitem"
-                  >
-                    <span className="docCardCheckWrap">
-                      <input
-                        className="docCardCb"
-                        type="checkbox"
-                        checked={selectedFileIds.includes(d.file_id)}
-                        onChange={(e) => onToggleDoc(d.file_id, e.target.checked)}
-                        disabled={busy}
-                      />
-                    </span>
-                    <span className="docCardFileIcon" aria-hidden>
-                      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" strokeLinejoin="round" />
-                        <path d="M14 2v6h6" strokeLinejoin="round" />
-                      </svg>
-                    </span>
-                    <div className="docCardBody">
-                      <span className="docName" title={d.file_name}>
-                        {d.file_name}
-                      </span>
-                      <div className="docCardBadges">
-                        {d.status ? (
-                          <span
-                            className={
-                              'docBadge' + (String(d.status).toUpperCase() === 'INGESTED' ? ' docBadgeOk' : '')
-                            }
-                          >
-                            {d.status}
-                          </span>
-                        ) : null}
-                        {d.technology ? <span className="docBadge docBadgeTech">{d.technology}</span> : null}
-                      </div>
-                    </div>
-                  </label>
-                ))}
-              </div>
-            </>
-          )}
-        </section>
-
-        <section className="chatsSection" aria-labelledby="chats-heading">
-          <h2 id="chats-heading" className="chatsHeading">
-            Chats
-          </h2>
-          <div className="sessions">
+          <div className="sessionsList">
             {sessions.length === 0 ? (
-              <div className="chatsEmpty muted">No conversations yet — start with New chat.</div>
+              <p className="emptyHint">Start a new chat to ask questions about your PDFs.</p>
             ) : (
               sessions.map((s) => (
                 <div
                   key={s.id}
-                  className={'session' + (s.id === activeSessionId ? ' selected' : '')}
+                  className={`sessionRow${s.id === activeSessionId ? ' sessionRowActive' : ''}`}
                   onClick={() => setActiveSessionId(s.id)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
@@ -535,25 +641,22 @@ export default function App() {
                   role="button"
                   tabIndex={0}
                 >
-                  <div className="sessionMain">
-                    <div className="sessionTitle" title={s.title}>
+                  <div className="sessionRowText">
+                    <div className="sessionRowTitle" title={s.title}>
                       {s.title}
                     </div>
-                    <div className="sessionMeta">
-                      <span className="sessionDot" aria-hidden />
-                      <span>{s.message_count ?? 0} messages</span>
-                    </div>
+                    <div className="sessionRowMeta">{s.message_count ?? 0} messages</div>
                   </div>
                   <button
-                    className="sessionRemove"
+                    type="button"
+                    className="sessionRowDelete"
+                    title="Delete chat"
+                    aria-label="Delete chat"
+                    disabled={pageBusy}
                     onClick={(e) => {
                       e.stopPropagation()
-                      onDeleteChat(s.id)
+                      void onDeleteChat(s.id)
                     }}
-                    disabled={busy}
-                    type="button"
-                    title="Remove chat"
-                    aria-label="Remove chat"
                   >
                     ×
                   </button>
@@ -561,259 +664,323 @@ export default function App() {
               ))
             )}
           </div>
-        </section>
-      </aside>
+        </aside>
+      )}
 
-      <main className="main">
-        <div className="topbar">
-          <div className="topbarTitle">
-            {mode === 'upload'
-              ? 'Upload PDFs'
-              : mode === 'library'
-                ? 'PDF Library'
-                : mode === 'dashboard'
-                  ? 'Usage dashboard'
-                  : activeSession?.title ?? 'Chat'}
+      <div className={`workspace${mode === 'chat' ? ' workspaceChat' : ''}`}>
+        <header className="workspaceHeader">
+          <div>
+            <h1 className="workspaceTitle">{headerTitle}</h1>
+            {mode === 'chat' && (
+              <p className="workspaceSubtitle muted">{scopeLabel}</p>
+            )}
           </div>
-          <div className="topbarRight">
-            <span className="pill" title="VITE_API_BASE_URL when set at build time">
-              {API_BASE_URL ? `API: ${API_BASE_URL}` : 'API: dev proxy → :8000'}
-            </span>
+          <span className="apiPill" title="API endpoint">
+            {API_BASE_URL ? API_BASE_URL.replace(/^https?:\/\//, '') : 'localhost:8000'}
+          </span>
+        </header>
+
+        {error && (
+          <div className="bannerError" role="alert">
+            <span>{error}</span>
+            <button type="button" className="bannerDismiss" onClick={() => setError(null)} aria-label="Dismiss error">
+              ×
+            </button>
+          </div>
+        )}
+
+        <div className="workspaceBody">
+          <div key={mode} className="viewPane">
+            {mode === 'dashboard' && (
+              <Dashboard
+                onError={(msg) => {
+                  setError(msg)
+                  pushToast('error', msg)
+                }}
+              />
+            )}
+
+            {mode === 'upload' && (
+              <div className="uploadLayout">
+                <section className="card uploadCard">
+                  <h2>Add documents to your library</h2>
+                  <p className="cardLead muted">
+                    Files are extracted, chunked, and indexed for retrieval. Duplicates are detected automatically.
+                  </p>
+                  <label
+                    className={`dropzone${pageBusy ? ' dropzoneDisabled' : ''}`}
+                    onDragOver={(e) => {
+                      e.preventDefault()
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      const picked = Array.from(e.dataTransfer.files).filter(
+                        (f) =>
+                          f.type === 'application/pdf' ||
+                          f.name.toLowerCase().endsWith('.pdf') ||
+                          f.type ===
+                            'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+                          f.name.toLowerCase().endsWith('.docx'),
+                      )
+                      if (picked.length) setFiles(picked)
+                    }}
+                  >
+                    <input
+                      type="file"
+                      accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx"
+                      multiple
+                      className="srOnly"
+                      disabled={pageBusy}
+                      onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
+                    />
+                    <span className="dropzoneTitle">Drop PDF or Word (.docx) files here</span>
+                    <span className="dropzoneSub muted">Multiple files supported</span>
+                  </label>
+                  {files.length > 0 && (
+                    <ul className="filePickList">
+                      {files.map((f, i) => (
+                        <li key={`${f.name}-${f.size}-${i}`}>
+                          <span>{f.name}</span>
+                          <span className="muted">{formatFileSize(f.size)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <div className="cardActions">
+                    <button type="button" className="btnPrimary" onClick={onUpload} disabled={pageBusy || files.length === 0}>
+                      {pageBusy ? (
+                        <>
+                          <span className="spinner" aria-hidden /> Processing…
+                        </>
+                      ) : (
+                        'Upload & index'
+                      )}
+                    </button>
+                    {files.length > 0 && (
+                      <button type="button" className="btnGhost" onClick={() => setFiles([])} disabled={pageBusy}>
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                </section>
+              </div>
+            )}
+
+            {mode === 'library' && (
+              <section className="libraryLayout">
+                <div className="libraryToolbar">
+                  <p className="muted">
+                    {libraryLoading ? 'Loading…' : libraryDocs.length ? `${libraryDocs.length} document(s)` : 'No documents yet.'}
+                  </p>
+                  <div className="libraryToolbarActions">
+                    <button type="button" className="btnSm" disabled={libraryLoading || pageBusy} onClick={() => refreshLibrary().catch((e) => setError(String(e)))}>
+                      Refresh
+                    </button>
+                    {libraryDocs.length > 0 && (
+                      <button
+                        type="button"
+                        className="btnSm btnDanger"
+                        disabled={libraryLoading || pageBusy}
+                        onClick={() => void onClearAllLibrary()}
+                      >
+                        Clear all
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="libraryGrid">
+                  {libraryDocs.map((d) => (
+                    <article key={d.document_id} className="libraryCard">
+                      <div className="libraryCardMain">
+                        <h3 title={d.file_name}>{d.file_name}</h3>
+                        <div className="libraryCardMeta">
+                          {d.status && <span className="tag">{d.status}</span>}
+                          {d.technology && <span className="tag tagAccent">{d.technology}</span>}
+                          {typeof d.chunk_count === 'number' && <span className="muted">{d.chunk_count} chunks</span>}
+                        </div>
+                      </div>
+                      <div className="libraryCardActions">
+                        <a className="btnSm" href={documentPdfUrl(d.document_id)} target="_blank" rel="noreferrer">
+                          View
+                        </a>
+                        <label className="btnSm">
+                          Replace
+                          <input
+                            type="file"
+                            accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx"
+                            className="srOnly"
+                            disabled={libraryBusyId === d.document_id}
+                            onChange={async (e) => {
+                              const f = e.target.files?.[0]
+                              if (!f) return
+                              setLibraryBusyId(d.document_id)
+                              try {
+                                await replaceDocument(d.document_id, f)
+                                await refreshLibrary()
+                                pushToast('success', 'Document re-indexed.', 'Replaced')
+                              } catch (err) {
+                                const msg = String(err)
+                                setError(msg)
+                                pushToast('error', msg)
+                              } finally {
+                                setLibraryBusyId(null)
+                                e.target.value = ''
+                              }
+                            }}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          className="btnSm btnDanger"
+                          disabled={libraryBusyId === d.document_id}
+                          onClick={() => onDeleteLibraryDocument(d.document_id)}
+                        >
+                          {libraryBusyId === d.document_id ? '…' : 'Delete'}
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {mode === 'chat' && (
+              <div className={`chatLayout${messagesLoading ? ' chatLayoutLoading' : ''}`}>
+                <div className="chatScroll">
+                  {messages.length === 0 && !messagesLoading && !chatSending ? (
+                    <div className="chatWelcome">
+                      <h2>Ask your documents</h2>
+                      <p className="muted">
+                        Questions use your full library unless you narrow scope below. Upload PDFs from the Upload tab first.
+                      </p>
+                      <ul className="chatWelcomeTips">
+                        <li>Summarize a report or contract section</li>
+                        <li>Compare policies across uploaded files</li>
+                        <li>Find tables, diagrams, or code snippets</li>
+                      </ul>
+                    </div>
+                  ) : (
+                    messages.map((m) => (
+                      <div key={m.id} className={`chatRow chatRow-${m.role}`}>
+                        <div className="chatAvatar" aria-hidden>
+                          {m.role === 'user' ? 'You' : 'AI'}
+                        </div>
+                        <div
+                          className={`chatBubble${m.role === 'assistant' ? ' chatBubbleMd' : ''}${m.role === 'assistant' && chatSending && !m.content ? ' thinking' : ''}`}
+                        >
+                          {m.role === 'assistant' ? (
+                            m.content ? (
+                              <ChatMarkdown content={m.content} />
+                            ) : chatSending ? (
+                              <>
+                                <span className="spinner" aria-hidden />
+                                <span>Thinking…</span>
+                              </>
+                            ) : null
+                          ) : (
+                            m.content
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                  {messagesLoading && (
+                    <div className="chatLoadingBar" aria-hidden>
+                      <span className="spinner" />
+                    </div>
+                  )}
+                  <div ref={messagesEndRef} />
+                </div>
+
+                <footer className="chatFooter">
+                  <div className={`scopeBar${scopeOpen ? ' scopeBarOpen' : ''}`}>
+                    <button
+                      type="button"
+                      className="scopeToggle"
+                      aria-expanded={scopeOpen}
+                      onClick={() => setScopeOpen((o) => !o)}
+                    >
+                      <span className="scopeToggleLabel">Document scope</span>
+                      <span className="scopeToggleValue muted">{scopeLabel}</span>
+                      <span className="scopeChevron" aria-hidden>
+                        {scopeOpen ? '▴' : '▾'}
+                      </span>
+                    </button>
+                    {scopeOpen && (
+                      <div className="scopePanel">
+                        <div className="scopePanelHead">
+                          <p className="muted scopeHint">
+                            Leave none selected to search every ingested PDF. Check files to limit this chat.
+                          </p>
+                          <div className="scopePanelActions">
+                            <button type="button" className="btnSm" disabled={anyBusy} onClick={() => void refreshLibrary()}>
+                              Sync library
+                            </button>
+                            <button type="button" className="btnSm" disabled={anyBusy || !availableDocOptions.length} onClick={() => void onSelectAllDocs()}>
+                              All
+                            </button>
+                            <button type="button" className="btnSm" disabled={anyBusy} onClick={() => void onClearDocSelection()}>
+                              None
+                            </button>
+                          </div>
+                        </div>
+                        {availableDocOptions.length === 0 ? (
+                          <p className="emptyHint">Upload PDFs to enable scoped search.</p>
+                        ) : (
+                          <div className="scopeDocList">
+                            {availableDocOptions.map((d) => {
+                              const checked = selectedFileIds.includes(d.file_id)
+                              return (
+                                <label key={d.file_id} className={`scopeDoc${checked ? ' scopeDocOn' : ''}`}>
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    disabled={anyBusy}
+                                    onChange={(e) => onToggleDoc(d.file_id, e.target.checked)}
+                                  />
+                                  <span className="scopeDocName" title={d.file_name}>
+                                    {d.file_name}
+                                  </span>
+                                  {d.status && <span className="tag">{d.status}</span>}
+                                </label>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <form
+                    className="composer"
+                    onSubmit={(e) => {
+                      e.preventDefault()
+                      void onSend()
+                    }}
+                  >
+                    <textarea
+                      rows={1}
+                      value={prompt}
+                      placeholder="Ask about your documents…"
+                      disabled={chatSending}
+                      onChange={(e) => setPrompt(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault()
+                          void onSend()
+                        }
+                      }}
+                    />
+                    <button type="submit" className="btnPrimary composerSend" disabled={chatSending || !prompt.trim()}>
+                      {chatSending ? '…' : 'Send'}
+                    </button>
+                  </form>
+                </footer>
+              </div>
+            )}
           </div>
         </div>
-
-        {error ? <div className="error">{error}</div> : null}
-
-        {mode === 'dashboard' ? (
-          <section className="dashboardPage" aria-labelledby="usage-dashboard-heading">
-            <h2 id="usage-dashboard-heading" className="srOnly">
-              Usage dashboard
-            </h2>
-            <Dashboard
-              onError={(msg) => {
-                setError(msg)
-                pushToast('error', msg)
-              }}
-            />
-          </section>
-        ) : mode === 'upload' ? (
-          <div className="uploadPage">
-            <section className="uploadCard" aria-labelledby="upload-heading">
-              <div className="uploadCardHeader">
-                <div className="uploadCardIcon" aria-hidden>
-                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.65">
-                    <path d="M12 4v12M8 8l4-4 4 4" strokeLinecap="round" strokeLinejoin="round" />
-                    <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" strokeLinecap="round" />
-                  </svg>
-                </div>
-                <div className="uploadCardTitles">
-                  <h2 id="upload-heading" className="uploadCardTitle">
-                    Add PDFs to your library
-                  </h2>
-                  <p className="uploadCardDesc">
-                    Text is extracted, chunked, and indexed for search and chat. Duplicate files are merged automatically.
-                  </p>
-                </div>
-              </div>
-
-              <label
-                className={'uploadDropzone' + (busy ? ' uploadDropzoneDisabled' : '')}
-                onDragOver={(e) => {
-                  e.preventDefault()
-                  e.stopPropagation()
-                }}
-                onDrop={(e) => {
-                  e.preventDefault()
-                  e.stopPropagation()
-                  const picked = Array.from(e.dataTransfer.files).filter(
-                    (f) => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'),
-                  )
-                  if (picked.length) setFiles(picked)
-                }}
-              >
-                <input
-                  type="file"
-                  accept="application/pdf"
-                  multiple
-                  className="uploadInputHidden"
-                  onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
-                  disabled={busy}
-                />
-                <div className="uploadDropzoneInner">
-                  <span className="uploadDropHint">Drop PDFs here or click to browse</span>
-                  <span className="uploadDropSub">Multiple files · max practical size depends on your API limits</span>
-                </div>
-              </label>
-
-              {files.length > 0 ? (
-                <ul className="uploadFileList">
-                  {files.map((f, i) => (
-                    <li key={`${f.name}-${f.size}-${i}`} className="uploadFileRow">
-                      <span className="uploadFileName" title={f.name}>
-                        {f.name}
-                      </span>
-                      <span className="uploadFileMeta">{formatFileSize(f.size)}</span>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-
-              <div className="uploadActions">
-                <button
-                  type="button"
-                  className="btnPrimary uploadSubmitBtn"
-                  onClick={onUpload}
-                  disabled={busy || files.length === 0}
-                >
-                  {busy ? (
-                    <>
-                      <span className="spinner" aria-hidden />
-                      Processing…
-                    </>
-                  ) : (
-                    'Upload & process'
-                  )}
-                </button>
-                {files.length > 0 ? (
-                  <button type="button" className="btnGhost" onClick={() => setFiles([])} disabled={busy}>
-                    Clear selection
-                  </button>
-                ) : null}
-              </div>
-            </section>
-          </div>
-        ) : mode === 'library' ? (
-          <section className="panel">
-            <div className="row" style={{ justifyContent: 'space-between' }}>
-              <div className="muted">{libraryDocs.length ? `${libraryDocs.length} document(s)` : 'No documents yet.'}</div>
-              <button
-                onClick={() => refreshLibrary().catch((e) => setError(String(e)))}
-                disabled={busy}
-                type="button"
-              >
-                Refresh
-              </button>
-            </div>
-            <div className="libraryList">
-              {libraryDocs.map((d) => (
-                <div key={d.document_id} className="libraryItem">
-                  <div className="libraryMain">
-                    <div className="libraryTitle" title={d.file_name}>
-                      {d.file_name}
-                    </div>
-                    <div className="libraryMeta">
-                      <span className="muted">id: {d.document_id}</span>
-                      {d.status ? <span className="docBadge">{d.status}</span> : null}
-                      {d.technology ? <span className="docBadge">{d.technology}</span> : null}
-                      {typeof d.chunk_count === 'number' ? <span className="muted">{d.chunk_count} chunks</span> : null}
-                    </div>
-                  </div>
-                  <div className="libraryActions">
-                    <a className="linkBtn" href={documentPdfUrl(d.document_id)} target="_blank" rel="noreferrer">
-                      View PDF
-                    </a>
-                    <button
-                      className="linkBtn danger"
-                      type="button"
-                      disabled={busy || libraryBusyId === d.document_id}
-                      onClick={() => onDeleteLibraryDocument(d.document_id)}
-                    >
-                      {libraryBusyId === d.document_id ? '…' : 'Delete'}
-                    </button>
-                    <label className="linkBtn">
-                      {libraryBusyId === d.document_id ? 'Replacing…' : 'Replace PDF'}
-                      <input
-                        type="file"
-                        accept="application/pdf"
-                        disabled={busy || libraryBusyId === d.document_id}
-                        style={{ display: 'none' }}
-                        onChange={async (e) => {
-                          const f = e.target.files?.[0]
-                          if (!f) return
-                          setError(null)
-                          setLibraryBusyId(d.document_id)
-                          try {
-                            await replaceDocument(d.document_id, f)
-                            await refreshLibrary()
-                            pushToast('success', 'Library and search index were refreshed.', 'PDF replaced')
-                          } catch (err) {
-                            const msg = String(err)
-                            setError(msg)
-                            pushToast('error', msg)
-                          } finally {
-                            setLibraryBusyId(null)
-                            e.target.value = ''
-                          }
-                        }}
-                      />
-                    </label>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        ) : (
-          <>
-            <section className="chat">
-              {messages.length === 0 ? (
-                <div className="muted chatHint">
-                  Start a chat and ask a question. Optional: use <strong>Your PDFs</strong> in the sidebar to narrow which
-                  files are searched.
-                </div>
-              ) : (
-                messages.map((m) => (
-                  <div key={m.id} className={'msg ' + (m.role === 'user' ? 'user' : 'assistant')}>
-                    <div className="role">{m.role}</div>
-                    <div
-                      className={
-                        'bubble' + (m.role === 'assistant' ? ' bubbleMd' : ' bubblePlain')
-                      }
-                    >
-                      {m.role === 'assistant' ? (
-                        <ChatMarkdown content={m.content} />
-                      ) : (
-                        m.content
-                      )}
-                    </div>
-                  </div>
-                ))
-              )}
-              {busy ? (
-                <div className="msg assistant">
-                  <div className="role">assistant</div>
-                  <div className="bubble bubbleMd thinking">
-                    <div className="thinkingRow">
-                      <span className="spinner" aria-hidden />
-                      <span>Thinking…</span>
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-              <div ref={messagesEndRef} />
-            </section>
-
-            <section className="composer">
-              <input
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                placeholder="Ask about your documents…"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) onSend()
-                }}
-                disabled={busy}
-              />
-              <button onClick={onSend} disabled={busy || !prompt.trim()} type="button">
-                {busy ? '…' : 'Send'}
-              </button>
-              <div className="composerMeta">
-                <span className="muted">
-                  Session: <code>{activeSessionId ?? '—'}</code>
-                </span>
-              </div>
-            </section>
-          </>
-        )}
-      </main>
+      </div>
     </div>
   )
 }

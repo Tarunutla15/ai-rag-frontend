@@ -59,7 +59,7 @@ export function Dashboard({ onError }: Props) {
               <option value={90}>90 days</option>
             </select>
           </label>
-          <button type="button" className="miniBtn" onClick={() => void load()} disabled={loading}>
+          <button type="button" className="btnSm" onClick={() => void load()} disabled={loading}>
             Refresh
           </button>
         </div>
