@@ -19,6 +19,7 @@ import {
 } from './api'
 import type { ChatMessage, ChatSession, DocumentInfo } from './types'
 import { ChatMarkdown } from './ChatMarkdown'
+import { ChatFigures } from './ChatFigures'
 import { Dashboard } from './Dashboard'
 
 type Mode = 'chat' | 'upload' | 'library' | 'dashboard'
@@ -311,11 +312,33 @@ export default function App() {
             const sid = meta.session_id
             if (!sid) return
             setMessages((m) =>
-              m.map((x) =>
-                x.id === userMsg.id || x.id === assistantId ? { ...x, session_id: sid } : x,
-              ),
+              m.map((x) => {
+                if (x.id === userMsg.id) return { ...x, session_id: sid }
+                if (x.id === assistantId) {
+                  return {
+                    ...x,
+                    session_id: sid,
+                    figures: meta.figures ?? x.figures ?? null,
+                  }
+                }
+                return x
+              }),
             )
             setActiveSessionId((prev) => prev ?? sid)
+          },
+          onDone: (data) => {
+            setMessages((m) =>
+              m.map((x) =>
+                x.id === assistantId
+                  ? {
+                      ...x,
+                      content: data.answer,
+                      session_id: data.session_id,
+                      figures: data.figures ?? x.figures ?? null,
+                    }
+                  : x,
+              ),
+            )
           },
           onToken: (token) => {
             setMessages((m) => {
@@ -331,6 +354,15 @@ export default function App() {
                 x.id === lastAssistant.id ? { ...x, content: x.content + token } : x,
               )
             })
+          },
+          onError: (detail) => {
+            setMessages((m) =>
+              m.map((x) =>
+                x.id === assistantId
+                  ? { ...x, content: `**Error:** ${detail}` }
+                  : x,
+              ),
+            )
           },
         },
       )
@@ -349,12 +381,14 @@ export default function App() {
       }
       setMessages((m) => {
         const hasPlaceholder = m.some((x) => x.id === assistantId)
+        const patchAssistant = (x: (typeof m)[0]) => ({
+          ...x,
+          content: res.answer,
+          session_id: res.session_id,
+          figures: res.figures ?? x.figures ?? null,
+        })
         if (hasPlaceholder) {
-          return m.map((x) =>
-            x.id === assistantId
-              ? { ...x, content: res.answer, session_id: res.session_id }
-              : x,
-          )
+          return m.map((x) => (x.id === assistantId ? patchAssistant(x) : x))
         }
         const lastAssistant = [...m].reverse().find((x) => x.role === 'assistant')
         if (!lastAssistant) {
@@ -365,21 +399,24 @@ export default function App() {
               session_id: res.session_id,
               role: 'assistant' as const,
               content: res.answer,
+              figures: res.figures ?? null,
               created_at: new Date().toISOString(),
             },
           ]
         }
-        return m.map((x) =>
-          x.id === lastAssistant.id
-            ? { ...x, content: res.answer, session_id: res.session_id }
-            : x,
-        )
+        return m.map((x) => (x.id === lastAssistant.id ? patchAssistant(x) : x))
       })
     } catch (e) {
-      const msg = String(e)
+      const msg = e instanceof Error ? e.message : String(e)
       setError(msg)
       pushToast('error', msg)
-      setMessages((m) => m.filter((x) => x.id !== userMsg.id && x.id !== assistantId))
+      setMessages((m) => {
+        const assistant = m.find((x) => x.id === assistantId)
+        if (assistant?.content?.trim()) {
+          return m
+        }
+        return m.filter((x) => x.id !== assistantId)
+      })
     } finally {
       setChatSending(false)
     }
@@ -870,7 +907,10 @@ export default function App() {
                         >
                           {m.role === 'assistant' ? (
                             m.content ? (
-                              <ChatMarkdown content={m.content} />
+                              <>
+                                <ChatMarkdown content={m.content} />
+                                {m.figures?.length ? <ChatFigures figures={m.figures} /> : null}
+                              </>
                             ) : chatSending ? (
                               <>
                                 <span className="spinner" aria-hidden />

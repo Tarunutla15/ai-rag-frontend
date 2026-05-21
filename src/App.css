@@ -1001,6 +1001,38 @@ button:disabled,
   padding: 8px 10px;
 }
 
+.chatFigures {
+  margin-top: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.chatFigure {
+  margin: 0;
+  max-width: 100%;
+}
+
+.chatFigure img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  border: 1px solid var(--border, #e2e8f0);
+  background: #fff;
+}
+
+.chatFigure figcaption {
+  margin-top: 0.35rem;
+  font-size: 0.8rem;
+}
+
+.chatBubbleMd .mdRoot img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  margin: 0.5rem 0;
+}
+
 .chatBubbleMd .mdRoot th {
   background: rgba(255, 255, 255, 0.05);
 }

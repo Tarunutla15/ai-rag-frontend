@@ -12,6 +12,7 @@ export type ChatMessage = {
   role: 'user' | 'assistant'
   content: string
   created_at: string
+  figures?: ChatFigure[] | null
 }
 
 export type SessionMessagesResponse = {
@@ -27,12 +28,21 @@ export type ChatRequest = {
   file_ids?: string[]
 }
 
+export type ChatFigure = {
+  image_id?: string | null
+  document_id?: string | null
+  view_url: string
+  caption?: string | null
+  page_number?: number | null
+}
+
 export type ChatResponse = {
   answer: string
   session_id: string
   sources?: string[] | null
   detected_technology?: string | null
   detected_domain?: string | null
+  figures?: ChatFigure[] | null
 }
 
 export type BatchUploadResponse = {

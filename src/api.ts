@@ -1,5 +1,6 @@
 import type {
   BatchUploadResponse,
+  ChatFigure,
   ChatRequest,
   ChatResponse,
   ChatSession,
@@ -13,7 +14,7 @@ import type {
 const rawBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() ?? ''
 export const API_BASE_URL = rawBase.replace(/\/$/, '')
 
-function apiUrl(path: string): string {
+export function apiUrl(path: string): string {
   const p = path.startsWith('/') ? path : `/${path}`
   return API_BASE_URL ? `${API_BASE_URL}${p}` : p
 }
@@ -103,6 +104,7 @@ export type ChatStreamHandlers = {
     session_id: string
     detected_technology?: string | null
     detected_domain?: string | null
+    figures?: ChatFigure[] | null
   }) => void
   onToken?: (content: string) => void
   onDone?: (data: ChatResponse) => void
@@ -126,6 +128,7 @@ export async function sendChatStream(
   const decoder = new TextDecoder()
   let buffer = ''
   let finalResponse: ChatResponse | null = null
+  let streamError: string | null = null
 
   const dispatch = (obj: Record<string, unknown>) => {
     const type = obj.type as string
@@ -134,6 +137,7 @@ export async function sendChatStream(
         session_id: String(obj.session_id),
         detected_technology: (obj.detected_technology as string | null) ?? null,
         detected_domain: (obj.detected_domain as string | null) ?? null,
+        figures: (obj.figures as ChatFigure[] | null) ?? null,
       })
     } else if (type === 'token' && typeof obj.content === 'string') {
       handlers.onToken?.(obj.content)
@@ -144,12 +148,12 @@ export async function sendChatStream(
         sources: (obj.sources as string[] | null) ?? null,
         detected_technology: (obj.detected_technology as string | null) ?? null,
         detected_domain: (obj.detected_domain as string | null) ?? null,
+        figures: (obj.figures as ChatFigure[] | null) ?? null,
       }
       handlers.onDone?.(finalResponse)
     } else if (type === 'error') {
-      const detail = String(obj.detail ?? 'Stream error')
-      handlers.onError?.(detail)
-      throw new Error(detail)
+      streamError = String(obj.detail ?? 'Stream error')
+      handlers.onError?.(streamError)
     }
   }
 
@@ -162,11 +166,13 @@ export async function sendChatStream(
         if (!trimmed.startsWith('data:')) continue
         const jsonStr = trimmed.slice(5).trim()
         if (!jsonStr) continue
+        let obj: Record<string, unknown>
         try {
-          dispatch(JSON.parse(jsonStr) as Record<string, unknown>)
+          obj = JSON.parse(jsonStr) as Record<string, unknown>
         } catch {
-          /* ignore malformed SSE chunks */
+          continue
         }
+        dispatch(obj)
       }
     }
     return remainder
@@ -182,6 +188,9 @@ export async function sendChatStream(
     parseSseBuffer(`${buffer}\n\n`)
   }
 
+  if (streamError) {
+    throw new Error(streamError)
+  }
   if (!finalResponse) {
     throw new Error('Stream ended without a completion event')
   }
