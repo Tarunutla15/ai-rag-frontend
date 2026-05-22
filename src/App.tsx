@@ -18,7 +18,7 @@ import {
   uploadBatch,
 } from './api'
 import type { ChatMessage, ChatSession, DocumentInfo } from './types'
-import { ChatMarkdown } from './ChatMarkdown'
+import { ChatMarkdown, stripDocumentFiguresFromMarkdown } from './ChatMarkdown'
 import { ChatFigures } from './ChatFigures'
 import { Dashboard } from './Dashboard'
 
@@ -903,13 +903,21 @@ export default function App() {
                           {m.role === 'user' ? 'You' : 'AI'}
                         </div>
                         <div
-                          className={`chatBubble${m.role === 'assistant' ? ' chatBubbleMd' : ''}${m.role === 'assistant' && chatSending && !m.content ? ' thinking' : ''}`}
+                          className={`chatBubble${m.role === 'assistant' ? ' chatBubbleMd' : ''}${m.role === 'assistant' && m.figures?.length ? ' chatBubbleMd--figures' : ''}${m.role === 'assistant' && chatSending && !m.content ? ' thinking' : ''}`}
                         >
                           {m.role === 'assistant' ? (
                             m.content ? (
                               <>
-                                <ChatMarkdown content={m.content} />
-                                {m.figures?.length ? <ChatFigures figures={m.figures} /> : null}
+                                <ChatMarkdown
+                                  content={
+                                    m.figures?.length
+                                      ? stripDocumentFiguresFromMarkdown(m.content)
+                                      : m.content
+                                  }
+                                />
+                                {m.figures?.length ? (
+                                  <ChatFigures figures={m.figures} />
+                                ) : null}
                               </>
                             ) : chatSending ? (
                               <>

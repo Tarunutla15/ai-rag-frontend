@@ -15,6 +15,17 @@ export function normalizeAssistantMarkdown(content: string): string {
     .trim()
 }
 
+const DOC_IMAGE_MD_RE =
+  /!\[[^\]]*\]\([^)]*\/documents\/[^)]+\/images\/(?:page\/\d+|[^)/\s]+)\)/gi
+
+/** Drop duplicate figure embeds when the client renders structured ``figures`` below the text. */
+export function stripDocumentFiguresFromMarkdown(content: string): string {
+  let s = content.replace(DOC_IMAGE_MD_RE, '')
+  s = s.replace(/\n+## Diagrams? from your document\s*\n*/gi, '\n\n')
+  s = s.replace(/\n+#{1,3}\s*Figure[^\n]*\n+(?=\n|$)/gi, '\n')
+  return normalizeAssistantMarkdown(s)
+}
+
 /**
  * Renders assistant messages: headings, lists, bold, tables (GFM), code blocks.
  * Embeds ![...](/documents/.../images/...) using the API base when VITE_API_BASE_URL is set.
